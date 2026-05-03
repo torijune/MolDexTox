@@ -29,13 +29,18 @@ except Exception:  # pragma: no cover
         return it
 
 _MOLDETOX_ROOT = Path(__file__).resolve().parent
-_DEFAULT_ENV = _MOLDETOX_ROOT.parent / ".env"
+_TOX_AGENT_ROOT = _MOLDETOX_ROOT.parent
+_DEFAULT_ENV = _TOX_AGENT_ROOT / ".env"
 _DEFAULT_MERGED_TEST = (
     _MOLDETOX_ROOT
     / "splits"
     / "scaffold_by_endpoint_property_outlier_dropped_moved_many_to_train"
     / "test.csv"
 )
+
+# Default QA pack: Build_MolDeTox_QA writes under ace_safe_ver/QA/qa_sets/MolDeTox_QA/
+# (hierarchical .../task*/both_repre/<step>/*.jsonl). Legacy flat test_task1_*.jsonl is also supported.
+_DEFAULT_QA_PACK_ROOT = _TOX_AGENT_ROOT / "ace_safe_ver" / "QA" / "qa_sets" / "MolDeTox_QA"
 
 # OpenAI json_schema (same shapes as inference_gpt.py)
 JSON_SCHEMA = {
@@ -101,6 +106,28 @@ def _split_subdir(split: str, *, unseen_test: bool) -> str:
     return split
 
 
+def _is_moldeox_q_flat_bundle(qa_root: Path) -> bool:
+    """True when QA matches MolDeTox_QA-style flat filenames (train_*/test_* prefix)."""
+    return (
+        (qa_root / "test" / "test_task1_single.jsonl").is_file()
+        or (qa_root / "train" / "train_task1_single.jsonl").is_file()
+    )
+
+
+def _moldeox_q_flat_relative_jsonl(task_short: str, split: str, step_norm: str, variant: str) -> Optional[str]:
+    """Relative path under qa_root/<split>/ for flat bundles (variant ``base`` only)."""
+    if variant != "base" or split not in ("train", "test"):
+        return None
+    slab = "single" if step_norm == "single_step" else "multi"
+    mapping = {
+        "task1": f"{split}_task1_{slab}.jsonl",
+        "task2": f"{split}_task2_{slab}.jsonl",
+        "task3": f"{split}_task3_smiles_gen_{slab}.jsonl",
+        "task3_nontoxic_safe_generation": f"{split}_task3_safe_gen_{slab}.jsonl",
+    }
+    return mapping.get(task_short)
+
+
 def _qa_filename(task_short: str, variant: str) -> str:
     folder = _TASK_SHORT_TO_QA_FOLDER[task_short]
     if task_short == "task1":
@@ -127,11 +154,20 @@ def resolve_qa_jsonl(
     step: str,
     unseen_test: bool,
 ) -> Path:
+    qa_root_res = qa_root.expanduser().resolve()
+    step_norm = _normalize_step(step)
+    if (
+        not unseen_test
+        and _is_moldeox_q_flat_bundle(qa_root_res)
+    ):
+        rel = _moldeox_q_flat_relative_jsonl(task_short, split, step_norm, variant)
+        if rel is not None:
+            return qa_root_res / split / rel
+
     split_dir = _split_subdir(split, unseen_test=unseen_test)
     sub = _TASK_SHORT_TO_QA_FOLDER[task_short]
-    step_norm = _normalize_step(step)
     fname = _qa_filename(task_short, variant)
-    return qa_root / split_dir / sub / "both_repre" / step_norm / fname
+    return qa_root_res / split_dir / sub / "both_repre" / step_norm / fname
 
 
 def _strip_jsonl_line(line: str) -> str:
@@ -632,8 +668,11 @@ def _add_common_args(ap: argparse.ArgumentParser) -> None:
     ap.add_argument(
         "--qa-root",
         type=Path,
-        default=_MOLDETOX_ROOT,
-        help="QA root (default: MolDeTox/). With Build_MolDeTox_QA --qa-set use .../MolDeTox/qa_sets/<name>/",
+        default=_DEFAULT_QA_PACK_ROOT,
+        help=(
+            "QA pack root (default: ToxAgent/ace_safe_ver/QA/qa_sets/MolDeTox_QA). "
+            "If QA was built with Build_MolDeTox_QA --no_desc, use .../MolDeTox_QA_no_desc."
+        ),
     )
     ap.add_argument(
         "--merged-split-csv",

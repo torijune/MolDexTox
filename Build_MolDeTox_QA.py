@@ -9,6 +9,8 @@ Fixed tasks supported:
 
 Representations always use ``both_repre`` subdirectory names included.
 
+Default QA destination: ``ToxAgent/ace_safe_ver/QA/qa_sets/MolDeTox_QA`` (override bundle with ``--qa_set``).
+
 Inputs may be scaffold splits or ToxicityCliff pairing exports; decoded columns tolerate ``toxic_smiles`` /
 ``nontoxic_smiles`` aliases.
 """
@@ -26,6 +28,11 @@ except Exception:  # pragma: no cover
     pd = None  # optional pandas for unseen merges
 
 _QA_DIR = Path(__file__).resolve().parent
+_PROJECT_ROOT = _QA_DIR.parent
+# Canonical QA bundles live next to ace_safe_ver (same layout as QA/LLMs/inference tools).
+_ACE_SAFE_QA_SETS_ROOT = _PROJECT_ROOT / "ace_safe_ver" / "QA" / "qa_sets"
+_DEFAULT_QA_SET_BUNDLE_NAME = "MolDeTox_QA"
+
 # Ensure MolDetox_QA_template imports resolve beside this folder
 if str(_QA_DIR) not in sys.path:
     sys.path.insert(0, str(_QA_DIR))
@@ -82,15 +89,17 @@ BUILD_QA_SHUFFLE_SEED: Optional[int] = None
 # Append endpoint narratives to prompts (default True).
 INCLUDE_ENDPOINT_DESCRIPTION: bool = True
 
-# Output base directories (configured per split=train/test)
-OUT_DIR_TASK1 = _QA_DIR / "test" / "task1_toxic_fragment_identification"
-OUT_DIR_TASK2 = _QA_DIR / "test" / "task2_nontoxic_fragment_generation"
-OUT_DIR_TASK3 = _QA_DIR / "test" / "task3_nontoxic_smiles_generation"
-OUT_DIR_TASK3_NONToxic_SAFE_GENERATION = _QA_DIR / "test" / "task3_nontoxic_safe_generation"
-OUT_DIR_TASK3_STEPWISE_COT_SAFE = _QA_DIR / "test" / "task3_stepwise_cot_nontoxic_safe_generation"
+# QA output root: ace_safe_ver/QA/qa_sets/<bundle>/ (default bundle MolDeTox_QA)
+QA_OUT_ROOT = _ACE_SAFE_QA_SETS_ROOT / _DEFAULT_QA_SET_BUNDLE_NAME
 
-# QA output root (--qa_set rewrites under QA/qa_sets/<name>/)
-QA_OUT_ROOT = _QA_DIR
+# Output base directories (overwritten by _configure_paths in main; default test + both_repre)
+OUT_DIR_TASK1 = QA_OUT_ROOT / "test" / "task1_toxic_fragment_identification" / CURRENT_MOLECULE_REPR
+OUT_DIR_TASK2 = QA_OUT_ROOT / "test" / "task2_nontoxic_fragment_generation" / CURRENT_MOLECULE_REPR
+OUT_DIR_TASK3 = QA_OUT_ROOT / "test" / "task3_nontoxic_smiles_generation" / CURRENT_MOLECULE_REPR
+OUT_DIR_TASK3_NONToxic_SAFE_GENERATION = QA_OUT_ROOT / "test" / "task3_nontoxic_safe_generation" / CURRENT_MOLECULE_REPR
+OUT_DIR_TASK3_STEPWISE_COT_SAFE = (
+    QA_OUT_ROOT / "test" / "task3_stepwise_cot_nontoxic_safe_generation" / CURRENT_MOLECULE_REPR
+)
 
 # Toxicity cliff exports may alias decoded columns via toxic_smiles / nontoxic_smiles entries
 REQUIRED_COLUMNS_TASK_MIN = [
@@ -591,7 +600,9 @@ def main():
         "--qa_set",
         type=str,
         default=None,
-        help="Optional QA bundle name persisted under qa_sets/<name>/ relative to MolDeTox.",
+        help=(
+            f"QA bundle directory name under ace_safe_ver/QA/qa_sets/ (default: {_DEFAULT_QA_SET_BUNDLE_NAME})."
+        ),
     )
     ap.add_argument(
         "--no_desc",
@@ -620,24 +631,19 @@ def main():
     global INCLUDE_ENDPOINT_DESCRIPTION
     INCLUDE_ENDPOINT_DESCRIPTION = not bool(args.no_desc)
 
-    # Disambiguate qa_set bundle name whenever descriptions are suppressed
-    if args.no_desc and args.qa_set:
-        _name = str(args.qa_set).strip()
-        if _name and not _name.endswith("_no_desc"):
-            args.qa_set = _name + "_no_desc"
-
     global BUILD_QA_SHUFFLE_SEED
     BUILD_QA_SHUFFLE_SEED = args.shuffle_seed if args.shuffle else None
 
     global QA_OUT_ROOT
-    if args.qa_set:
-        safe = (args.qa_set or "").strip().strip("/").replace("..", "").replace("\\", "_")
-        safe = safe.replace("/", "_")
-        if not safe:
-            raise ValueError("--qa_set cannot be empty.")
-        QA_OUT_ROOT = (_QA_DIR / "qa_sets" / safe).resolve()
-        QA_OUT_ROOT.mkdir(parents=True, exist_ok=True)
-        print(f"[qa_set] output_root={QA_OUT_ROOT}")
+    bundle = (args.qa_set or "").strip() or _DEFAULT_QA_SET_BUNDLE_NAME
+    if args.no_desc and not bundle.endswith("_no_desc"):
+        bundle = f"{bundle}_no_desc"
+    safe = bundle.strip("/").replace("..", "").replace("\\", "_").replace("/", "_")
+    if not safe:
+        raise ValueError("--qa_set cannot be empty when provided.")
+    QA_OUT_ROOT = (_ACE_SAFE_QA_SETS_ROOT / safe).resolve()
+    QA_OUT_ROOT.mkdir(parents=True, exist_ok=True)
+    print(f"[qa_set] output_root={QA_OUT_ROOT}")
 
     def _input_csv_for_split(split: str) -> Path | None:
         if args.unseen:
