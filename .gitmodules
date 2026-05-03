@@ -1,0 +1,3 @@
+[submodule "safe"]
+	path = safe
+	url = https://github.com/datamol-io/safe.git
